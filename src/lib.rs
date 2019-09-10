@@ -32,7 +32,6 @@ fn expect_ident(expr: &Expr) -> Ident {
         .clone()
 }
 
-#[derive(Debug)]
 struct Args {
     radius_squared: u32,
     array_ident: Ident,
