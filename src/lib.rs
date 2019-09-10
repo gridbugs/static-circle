@@ -58,33 +58,81 @@ impl Parse for Args {
     }
 }
 
-fn make_south_east_octant(radius_squared: u32) -> Vec<Coord> {
-    let mut radius = 0;
-    while (radius + 1) * (radius + 1) <= radius_squared {
-        radius += 1;
+struct ZeroSized;
+
+struct SouthSouthEastOctant {
+    coords_anti_clockwise: Vec<Coord>,
+    ends_on_diagonal: bool,
+}
+
+impl SouthSouthEastOctant {
+    fn new(radius_squared: u32) -> Result<Self, ZeroSized> {
+        if radius_squared == 0 {
+            return Err(ZeroSized);
+        }
+        let mut radius = 0;
+        while (radius + 1) * (radius + 1) <= radius_squared {
+            radius += 1;
+        }
+        let mut current = Coord::new(0, radius as i32);
+        let mut coords = Vec::new();
+        let ends_on_diagonal = loop {
+            coords.push(current);
+            if current.x == current.y {
+                break true;
+            }
+            current.x += 1;
+            if current.magnitude2() > radius_squared {
+                current.y -= 1;
+            } else if current.x == current.y {
+                // If the octant ends on a diagonal, and the last step was not diagonal, it will
+                // create an awkward-looking bend at the point where this and the next octant meet.
+                // This prevents emitting the final coord in such cases.
+                break false;
+            }
+            if current.x > current.y {
+                break false;
+            }
+        };
+        Ok(Self {
+            coords_anti_clockwise: coords,
+            ends_on_diagonal,
+        })
     }
-    let mut current = Coord::new(0, radius as i32);
-    let mut octant = Vec::new();
-    loop {
-        octant.push(current);
-        if current.x == current.y {
-            break;
-        }
-        current.x += 1;
-        if current.magnitude2() > radius_squared {
-            current.y -= 1;
-        }
-        if current.x > current.y {
-            break;
-        }
+    fn south_east_quadrant_anti_clockwise(&self) -> Vec<Coord> {
+        let south_south_east = self.coords_anti_clockwise.iter();
+        let mut east_south_east = self.coords_anti_clockwise[1..]
+            .iter()
+            .map(|&Coord { x, y }| Coord::new(y, x))
+            .collect::<Vec<_>>();
+        east_south_east.reverse();
+        let start_offset = if self.ends_on_diagonal { 1 } else { 0 };
+        south_south_east
+            .chain(east_south_east[start_offset..].iter())
+            .cloned()
+            .collect()
     }
-    octant
+}
+
+fn coord_rotate_anti_clockwise_90(Coord { x, y }: Coord) -> Coord {
+    Coord::new(y, -x)
 }
 
 fn make_circle(radius_squared: u32) -> Vec<Coord> {
-    let make_south_east_octant = make_south_east_octant(radius_squared);
-    let mut circle = Vec::new();
-    circle
+    let south_south_east = match SouthSouthEastOctant::new(radius_squared) {
+        Err(ZeroSized) => return vec![Coord::new(0, 0)],
+        Ok(octant) => octant,
+    };
+    let south_east_buffer = south_south_east.south_east_quadrant_anti_clockwise();
+    let south_east = south_east_buffer.iter().cloned();
+    let north_east = south_east.clone().map(coord_rotate_anti_clockwise_90);
+    let north_west = north_east.clone().map(coord_rotate_anti_clockwise_90);
+    let south_west = north_west.clone().map(coord_rotate_anti_clockwise_90);
+    south_east
+        .chain(north_east)
+        .chain(north_west)
+        .chain(south_west)
+        .collect()
 }
 
 #[proc_macro]
@@ -96,9 +144,12 @@ pub fn circle_with_squared_radius(tokens: TokenStream) -> TokenStream {
         coord_type,
     } = parse_macro_input!(tokens as Args);
     let circle = make_circle(radius_squared);
-    eprintln!("{:#?}", circle);
+    let x_iter = circle.iter().map(|c| c.x);
+    let y_iter = circle.iter().map(|c| c.y);
+    let num = circle.len();
     let expanded = quote! {
-        const X: [#coord_type; 2] = [#coord_type::new(0, 0), #coord_type::new(1, 1)];
+        const #num_ident: usize = #num;
+        const #array_ident: [#coord_type; #num_ident] = [ #( #coord_type::new(#x_iter, #y_iter), )* ];
     };
     TokenStream::from(expanded)
 }
